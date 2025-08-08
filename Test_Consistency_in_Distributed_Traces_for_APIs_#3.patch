@@ -1,0 +1,596 @@
+Subject: [PATCH] Test Consistency in Distributed Traces for APIs #3
+---
+Index: spring-petclinic-api-gateway/src/test/java/org/springframework/samples/petclinic/api/tracing/README.md
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/spring-petclinic-api-gateway/src/test/java/org/springframework/samples/petclinic/api/tracing/README.md b/spring-petclinic-api-gateway/src/test/java/org/springframework/samples/petclinic/api/tracing/README.md
+new file mode 100644
+--- /dev/null	(revision 607ac47050eac2046b2b3de6ede7799bb39123f6)
++++ b/spring-petclinic-api-gateway/src/test/java/org/springframework/samples/petclinic/api/tracing/README.md	(revision 607ac47050eac2046b2b3de6ede7799bb39123f6)
+@@ -0,0 +1,96 @@
++# Distributed Tracing in Spring PetClinic Microservices
++
++This document explains how distributed tracing is implemented in the Spring PetClinic Microservices application and how to validate trace logs in the local Zipkin instance.
++
++## Implementation Overview
++
++The Spring PetClinic Microservices application uses Micrometer Tracing with Brave and Zipkin to implement distributed tracing. This allows tracking requests as they flow through the different microservices.
++
++Key components:
++- **Micrometer Tracing**: Provides the API for creating and managing traces
++- **Brave**: Implementation of the tracing API
++- **Zipkin**: Distributed tracing system for collecting and visualizing trace data
++
++## Trace ID and Span ID Logging
++
++All key API endpoints in the application log their trace ID and span ID. This makes it possible to correlate logs across services and track the flow of requests.
++
++Example log message:
++```
++Finding owner with ID: 1, traceId: 4bf92f3577b34da6a3ce929d0e0e4736, spanId: a2fb4a1d1a96d312
++```
++
++## Validating Trace Logs in Zipkin
++
++To validate that trace logs are properly sent to Zipkin:
++
++1. **Start the application**:
++   ```
++   ./mvnw spring-boot:run
++   ```
++
++2. **Start Zipkin** (if not already running):
++   ```
++   docker run -d -p 9411:9411 openzipkin/zipkin
++   ```
++
++3. **Generate some traffic**:
++   - Access the application at http://localhost:8080
++   - Navigate through different pages
++   - Create, read, update owners and pets
++
++4. **Access the Zipkin UI**:
++   - Open http://localhost:9411 in your browser
++   - Click on "Find Traces" to see the collected traces
++   - You can filter traces by service name, operation name, or duration
++
++5. **Examine a trace**:
++   - Click on a trace to see its details
++   - You'll see a timeline of spans across different services
++   - Each span represents an operation in a service
++   - You can see the duration of each span and how they relate to each other
++
++6. **Verify trace propagation**:
++   - Check that a single trace ID is maintained across multiple services
++   - Verify that parent-child relationships between spans are correct
++   - Confirm that the trace includes all services involved in processing the request
++
++## Running the Integration Test
++
++The `TracingIntegrationTest` class demonstrates how to verify trace ID propagation:
++
++1. **Run the test**:
++   ```
++   ./mvnw test -Dtest=TracingIntegrationTest
++   ```
++
++2. **Check the logs**:
++   - Look for log messages with trace IDs and span IDs
++   - Verify that the same trace ID appears in logs from different services
++
++3. **Check Zipkin**:
++   - Open http://localhost:9411
++   - Search for the trace ID from the logs
++   - Verify that the trace includes spans from all services involved
++
++## Troubleshooting
++
++If traces are not appearing in Zipkin:
++
++1. **Check application.yml**:
++   - Verify that tracing is enabled
++   - Check that the sampling probability is set to 1.0 for development
++
++2. **Check connectivity**:
++   - Ensure Zipkin is running and accessible
++   - Verify that services can connect to Zipkin
++
++3. **Check logs**:
++   - Look for any errors related to tracing or Zipkin
++   - Verify that trace IDs are being logged
++
++## Additional Resources
++
++- [Micrometer Tracing Documentation](https://micrometer.io/docs/tracing)
++- [Zipkin Documentation](https://zipkin.io/pages/documentation)
++- [Spring Cloud Sleuth Migration Guide](https://docs.spring.io/spring-cloud-sleuth/docs/current-SNAPSHOT/reference/html/migration-guide.html) (for migrating from Spring Cloud Sleuth to Micrometer Tracing)
+Index: spring-petclinic-api-gateway/src/test/java/org/springframework/samples/petclinic/api/tracing/TracingIntegrationTest.java
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/spring-petclinic-api-gateway/src/test/java/org/springframework/samples/petclinic/api/tracing/TracingIntegrationTest.java b/spring-petclinic-api-gateway/src/test/java/org/springframework/samples/petclinic/api/tracing/TracingIntegrationTest.java
+new file mode 100644
+--- /dev/null	(revision 607ac47050eac2046b2b3de6ede7799bb39123f6)
++++ b/spring-petclinic-api-gateway/src/test/java/org/springframework/samples/petclinic/api/tracing/TracingIntegrationTest.java	(revision 607ac47050eac2046b2b3de6ede7799bb39123f6)
+@@ -0,0 +1,98 @@
++package org.springframework.samples.petclinic.api.tracing;
++
++import io.micrometer.tracing.Tracer;
++import io.micrometer.tracing.Span;
++import org.junit.jupiter.api.Test;
++import org.slf4j.Logger;
++import org.slf4j.LoggerFactory;
++import org.springframework.beans.factory.annotation.Autowired;
++import org.springframework.boot.test.context.SpringBootTest;
++import org.springframework.boot.test.web.client.TestRestTemplate;
++import org.springframework.boot.test.web.server.LocalServerPort;
++import org.springframework.http.HttpEntity;
++import org.springframework.http.HttpHeaders;
++import org.springframework.http.HttpMethod;
++import org.springframework.http.ResponseEntity;
++import org.springframework.test.context.ActiveProfiles;
++
++import static org.junit.jupiter.api.Assertions.assertNotNull;
++
++/**
++ * Integration test for distributed tracing.
++ *
++ * This test demonstrates how to verify trace ID propagation between services.
++ * It makes a request to the API Gateway, which then calls the visits-service.
++ *
++ * To fully verify trace ID propagation:
++ * 1. Run this test
++ * 2. Check the logs of the API Gateway and visits-service
++ * 3. Verify that the same trace ID appears in both services' logs
++ * 4. Check the Zipkin UI at http://localhost:9411 to see the distributed trace
++ */
++@ActiveProfiles("test")
++@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
++public class TracingIntegrationTest {
++
++    private static final Logger log = LoggerFactory.getLogger(TracingIntegrationTest.class);
++
++    @LocalServerPort
++    private int port;
++
++    @Autowired
++    private TestRestTemplate restTemplate;
++
++    @Autowired
++    private Tracer tracer;
++
++    /**
++     * Test that verifies trace ID propagation.
++     *
++     * This test makes a request to the API Gateway's owners endpoint,
++     * which should create a trace. The trace ID and span ID are logged
++     * for manual verification.
++     *
++     * To fully verify trace ID propagation, check the logs of the API Gateway
++     * and the downstream services to ensure the same trace ID appears in all logs.
++     */
++    @Test
++    public void testTraceIdPropagation() {
++        // Make a request to the API Gateway
++        String url = "http://localhost:" + port + "/api/customer/owners";
++
++        // Log the current trace context before making the request
++        Span currentSpan = tracer.currentSpan();
++        if (currentSpan != null) {
++            String traceId = currentSpan.context().traceId();
++            String spanId = currentSpan.context().spanId();
++            log.info("Before request - TraceId: {}, SpanId: {}", traceId, spanId);
++        } else {
++            log.info("No current span before request");
++        }
++
++        // Make the request
++        ResponseEntity<String> response = restTemplate.exchange(
++            url,
++            HttpMethod.GET,
++            new HttpEntity<>(new HttpHeaders()),
++            String.class
++        );
++
++        // Log the current trace context after making the request
++        currentSpan = tracer.currentSpan();
++        if (currentSpan != null) {
++            String traceId = currentSpan.context().traceId();
++            String spanId = currentSpan.context().spanId();
++            log.info("After request - TraceId: {}, SpanId: {}", traceId, spanId);
++        } else {
++            log.info("No current span after request");
++        }
++
++        // Verify the response
++        assertNotNull(response.getBody());
++        log.info("Response received: {}", response.getStatusCode());
++
++        // Note: To fully verify trace ID propagation, check the logs of all services
++        // and verify that the same trace ID appears in all logs.
++        // You can also check the Zipkin UI at http://localhost:9411 to see the distributed trace.
++    }
++}
+Index: spring-petclinic-customers-service/src/main/java/org/springframework/samples/petclinic/customers/web/OwnerResource.java
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/spring-petclinic-customers-service/src/main/java/org/springframework/samples/petclinic/customers/web/OwnerResource.java b/spring-petclinic-customers-service/src/main/java/org/springframework/samples/petclinic/customers/web/OwnerResource.java
+--- a/spring-petclinic-customers-service/src/main/java/org/springframework/samples/petclinic/customers/web/OwnerResource.java	(revision c79c39221b712ccc8badc826d029c767a48a8843)
++++ b/spring-petclinic-customers-service/src/main/java/org/springframework/samples/petclinic/customers/web/OwnerResource.java	(revision 607ac47050eac2046b2b3de6ede7799bb39123f6)
+@@ -16,6 +16,8 @@
+ package org.springframework.samples.petclinic.customers.web;
+ 
+ import io.micrometer.core.annotation.Timed;
++import io.micrometer.tracing.Tracer;
++import io.micrometer.tracing.Span;
+ import jakarta.validation.Valid;
+ import jakarta.validation.constraints.Min;
+ import org.slf4j.Logger;
+@@ -45,10 +47,12 @@
+ 
+     private final OwnerRepository ownerRepository;
+     private final OwnerEntityMapper ownerEntityMapper;
++    private final Tracer tracer;
+ 
+-    OwnerResource(OwnerRepository ownerRepository, OwnerEntityMapper ownerEntityMapper) {
++    OwnerResource(OwnerRepository ownerRepository, OwnerEntityMapper ownerEntityMapper, Tracer tracer) {
+         this.ownerRepository = ownerRepository;
+         this.ownerEntityMapper = ownerEntityMapper;
++        this.tracer = tracer;
+     }
+ 
+     /**
+@@ -57,6 +61,14 @@
+     @PostMapping
+     @ResponseStatus(HttpStatus.CREATED)
+     public Owner createOwner(@Valid @RequestBody OwnerRequest ownerRequest) {
++        Span currentSpan = tracer.currentSpan();
++        if (currentSpan != null) {
++            String traceId = currentSpan.context().traceId();
++            String spanId = currentSpan.context().spanId();
++            log.info("Creating new owner, traceId: {}, spanId: {}", traceId, spanId);
++        } else {
++            log.info("Creating new owner, no current span found");
++        }
+         Owner owner = ownerEntityMapper.map(new Owner(), ownerRequest);
+         return ownerRepository.save(owner);
+     }
+@@ -66,6 +78,14 @@
+      */
+     @GetMapping(value = "/{ownerId}")
+     public Optional<Owner> findOwner(@PathVariable("ownerId") @Min(1) int ownerId) {
++        Span currentSpan = tracer.currentSpan();
++        if (currentSpan != null) {
++            String traceId = currentSpan.context().traceId();
++            String spanId = currentSpan.context().spanId();
++            log.info("Finding owner with ID: {}, traceId: {}, spanId: {}", ownerId, traceId, spanId);
++        } else {
++            log.info("Finding owner with ID: {}, no current span found", ownerId);
++        }
+         return ownerRepository.findById(ownerId);
+     }
+ 
+@@ -83,6 +103,15 @@
+     @PutMapping(value = "/{ownerId}")
+     @ResponseStatus(HttpStatus.NO_CONTENT)
+     public void updateOwner(@PathVariable("ownerId") @Min(1) int ownerId, @Valid @RequestBody OwnerRequest ownerRequest) {
++        Span currentSpan = tracer.currentSpan();
++        if (currentSpan != null) {
++            String traceId = currentSpan.context().traceId();
++            String spanId = currentSpan.context().spanId();
++            log.info("Updating owner with ID: {}, traceId: {}, spanId: {}", ownerId, traceId, spanId);
++        } else {
++            log.info("Updating owner with ID: {}, no current span found", ownerId);
++        }
++
+         final Owner ownerModel = ownerRepository.findById(ownerId).orElseThrow(() -> new ResourceNotFoundException("Owner " + ownerId + " not found"));
+ 
+         ownerEntityMapper.map(ownerModel, ownerRequest);
+Index: spring-petclinic-customers-service/src/main/java/org/springframework/samples/petclinic/customers/web/PetResource.java
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/spring-petclinic-customers-service/src/main/java/org/springframework/samples/petclinic/customers/web/PetResource.java b/spring-petclinic-customers-service/src/main/java/org/springframework/samples/petclinic/customers/web/PetResource.java
+--- a/spring-petclinic-customers-service/src/main/java/org/springframework/samples/petclinic/customers/web/PetResource.java	(revision c79c39221b712ccc8badc826d029c767a48a8843)
++++ b/spring-petclinic-customers-service/src/main/java/org/springframework/samples/petclinic/customers/web/PetResource.java	(revision 607ac47050eac2046b2b3de6ede7799bb39123f6)
+@@ -16,6 +16,8 @@
+ package org.springframework.samples.petclinic.customers.web;
+ 
+ import io.micrometer.core.annotation.Timed;
++import io.micrometer.tracing.Tracer;
++import io.micrometer.tracing.Span;
+ import jakarta.validation.constraints.Min;
+ import org.slf4j.Logger;
+ import org.slf4j.LoggerFactory;
+@@ -40,10 +42,12 @@
+ 
+     private final PetRepository petRepository;
+     private final OwnerRepository ownerRepository;
++    private final Tracer tracer;
+ 
+-    PetResource(PetRepository petRepository, OwnerRepository ownerRepository) {
++    PetResource(PetRepository petRepository, OwnerRepository ownerRepository, Tracer tracer) {
+         this.petRepository = petRepository;
+         this.ownerRepository = ownerRepository;
++        this.tracer = tracer;
+     }
+ 
+     @GetMapping("/petTypes")
+@@ -57,6 +61,15 @@
+         @RequestBody PetRequest petRequest,
+         @PathVariable("ownerId") @Min(1) int ownerId) {
+ 
++        Span currentSpan = tracer.currentSpan();
++        if (currentSpan != null) {
++            String traceId = currentSpan.context().traceId();
++            String spanId = currentSpan.context().spanId();
++            log.info("Creating pet for owner ID: {}, traceId: {}, spanId: {}", ownerId, traceId, spanId);
++        } else {
++            log.info("Creating pet for owner ID: {}, no current span found", ownerId);
++        }
++
+         Owner owner = ownerRepository.findById(ownerId)
+             .orElseThrow(() -> new ResourceNotFoundException("Owner " + ownerId + " not found"));
+ 
+@@ -69,6 +82,16 @@
+     @ResponseStatus(HttpStatus.NO_CONTENT)
+     public void processUpdateForm(@RequestBody PetRequest petRequest) {
+         int petId = petRequest.id();
++
++        Span currentSpan = tracer.currentSpan();
++        if (currentSpan != null) {
++            String traceId = currentSpan.context().traceId();
++            String spanId = currentSpan.context().spanId();
++            log.info("Updating pet with ID: {}, traceId: {}, spanId: {}", petId, traceId, spanId);
++        } else {
++            log.info("Updating pet with ID: {}, no current span found", petId);
++        }
++
+         Pet pet = findPetById(petId);
+         save(pet, petRequest);
+     }
+@@ -87,6 +110,14 @@
+ 
+     @GetMapping("owners/*/pets/{petId}")
+     public PetDetails findPet(@PathVariable("petId") int petId) {
++        Span currentSpan = tracer.currentSpan();
++        if (currentSpan != null) {
++            String traceId = currentSpan.context().traceId();
++            String spanId = currentSpan.context().spanId();
++            log.info("Finding pet with ID: {}, traceId: {}, spanId: {}", petId, traceId, spanId);
++        } else {
++            log.info("Finding pet with ID: {}, no current span found", petId);
++        }
+         Pet pet = findPetById(petId);
+         return new PetDetails(pet);
+     }
+Index: spring-petclinic-customers-service/src/test/java/org/springframework/samples/petclinic/customers/web/PetResourceTest.java
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/spring-petclinic-customers-service/src/test/java/org/springframework/samples/petclinic/customers/web/PetResourceTest.java b/spring-petclinic-customers-service/src/test/java/org/springframework/samples/petclinic/customers/web/PetResourceTest.java
+--- a/spring-petclinic-customers-service/src/test/java/org/springframework/samples/petclinic/customers/web/PetResourceTest.java	(revision c79c39221b712ccc8badc826d029c767a48a8843)
++++ b/spring-petclinic-customers-service/src/test/java/org/springframework/samples/petclinic/customers/web/PetResourceTest.java	(revision 607ac47050eac2046b2b3de6ede7799bb39123f6)
+@@ -1,28 +1,22 @@
+ package org.springframework.samples.petclinic.customers.web;
+ 
+-import java.util.Optional;
+-
++import io.micrometer.tracing.Tracer;
+ import org.junit.jupiter.api.Test;
+ import org.junit.jupiter.api.extension.ExtendWith;
+ import org.springframework.beans.factory.annotation.Autowired;
+ import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
+ import org.springframework.boot.test.mock.mockito.MockBean;
+ import org.springframework.http.MediaType;
+-import org.springframework.samples.petclinic.customers.model.Owner;
+-import org.springframework.samples.petclinic.customers.model.OwnerRepository;
+-import org.springframework.samples.petclinic.customers.model.Pet;
+-import org.springframework.samples.petclinic.customers.model.PetRepository;
+-import org.springframework.samples.petclinic.customers.model.PetType;
++import org.springframework.samples.petclinic.customers.model.*;
+ import org.springframework.test.context.ActiveProfiles;
+ import org.springframework.test.context.junit.jupiter.SpringExtension;
+ import org.springframework.test.web.servlet.MockMvc;
+ 
++import java.util.Optional;
+ 
+ import static org.mockito.BDDMockito.given;
+ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
+-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
++import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
+ 
+ /**
+  * @author Maciej Szarlinski
+@@ -41,6 +35,9 @@
+     @MockBean
+     OwnerRepository ownerRepository;
+ 
++    @MockBean
++    private Tracer tracer;
++
+     @Test
+     void shouldGetAPetInJSonFormat() throws Exception {
+ 
+Index: spring-petclinic-vets-service/src/main/java/org/springframework/samples/petclinic/vets/web/VetResource.java
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/spring-petclinic-vets-service/src/main/java/org/springframework/samples/petclinic/vets/web/VetResource.java b/spring-petclinic-vets-service/src/main/java/org/springframework/samples/petclinic/vets/web/VetResource.java
+--- a/spring-petclinic-vets-service/src/main/java/org/springframework/samples/petclinic/vets/web/VetResource.java	(revision c79c39221b712ccc8badc826d029c767a48a8843)
++++ b/spring-petclinic-vets-service/src/main/java/org/springframework/samples/petclinic/vets/web/VetResource.java	(revision 607ac47050eac2046b2b3de6ede7799bb39123f6)
+@@ -17,6 +17,10 @@
+ 
+ import java.util.List;
+ 
++import io.micrometer.tracing.Tracer;
++import io.micrometer.tracing.Span;
++import org.slf4j.Logger;
++import org.slf4j.LoggerFactory;
+ import org.springframework.cache.annotation.Cacheable;
+ import org.springframework.samples.petclinic.vets.model.Vet;
+ import org.springframework.samples.petclinic.vets.model.VetRepository;
+@@ -35,15 +39,27 @@
+ @RestController
+ class VetResource {
+ 
++    private static final Logger log = LoggerFactory.getLogger(VetResource.class);
++
+     private final VetRepository vetRepository;
++    private final Tracer tracer;
+ 
+-    VetResource(VetRepository vetRepository) {
++    VetResource(VetRepository vetRepository, Tracer tracer) {
+         this.vetRepository = vetRepository;
++        this.tracer = tracer;
+     }
+ 
+     @GetMapping
+     @Cacheable("vets")
+     public List<Vet> showResourcesVetList() {
++        Span currentSpan = tracer.currentSpan();
++        if (currentSpan != null) {
++            String traceId = currentSpan.context().traceId();
++            String spanId = currentSpan.context().spanId();
++            log.info("Retrieving all vets, traceId: {}, spanId: {}", traceId, spanId);
++        } else {
++            log.info("Retrieving all vets, no current span found");
++        }
+         return vetRepository.findAll();
+     }
+ }
+Index: spring-petclinic-vets-service/src/test/java/org/springframework/samples/petclinic/vets/web/VetResourceTest.java
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/spring-petclinic-vets-service/src/test/java/org/springframework/samples/petclinic/vets/web/VetResourceTest.java b/spring-petclinic-vets-service/src/test/java/org/springframework/samples/petclinic/vets/web/VetResourceTest.java
+--- a/spring-petclinic-vets-service/src/test/java/org/springframework/samples/petclinic/vets/web/VetResourceTest.java	(revision c79c39221b712ccc8badc826d029c767a48a8843)
++++ b/spring-petclinic-vets-service/src/test/java/org/springframework/samples/petclinic/vets/web/VetResourceTest.java	(revision 607ac47050eac2046b2b3de6ede7799bb39123f6)
+@@ -15,6 +15,7 @@
+  */
+ package org.springframework.samples.petclinic.vets.web;
+ 
++import io.micrometer.tracing.Tracer;
+ import org.junit.jupiter.api.Test;
+ import org.junit.jupiter.api.extension.ExtendWith;
+ import org.springframework.beans.factory.annotation.Autowired;
+@@ -47,6 +48,9 @@
+     @MockBean
+     VetRepository vetRepository;
+ 
++    @MockBean
++    private Tracer tracer;
++
+     @Test
+     void shouldGetAListOfVets() throws Exception {
+ 
+Index: spring-petclinic-visits-service/src/main/java/org/springframework/samples/petclinic/visits/web/VisitResource.java
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/spring-petclinic-visits-service/src/main/java/org/springframework/samples/petclinic/visits/web/VisitResource.java b/spring-petclinic-visits-service/src/main/java/org/springframework/samples/petclinic/visits/web/VisitResource.java
+--- a/spring-petclinic-visits-service/src/main/java/org/springframework/samples/petclinic/visits/web/VisitResource.java	(revision c79c39221b712ccc8badc826d029c767a48a8843)
++++ b/spring-petclinic-visits-service/src/main/java/org/springframework/samples/petclinic/visits/web/VisitResource.java	(revision 607ac47050eac2046b2b3de6ede7799bb39123f6)
+@@ -20,6 +20,8 @@
+ import jakarta.validation.constraints.Min;
+ 
+ import io.micrometer.core.annotation.Timed;
++import io.micrometer.tracing.Tracer;
++import io.micrometer.tracing.Span;
+ import org.slf4j.Logger;
+ import org.slf4j.LoggerFactory;
+ import org.springframework.http.HttpStatus;
+@@ -48,9 +50,11 @@
+     private static final Logger log = LoggerFactory.getLogger(VisitResource.class);
+ 
+     private final VisitRepository visitRepository;
++    private final Tracer tracer;
+ 
+-    VisitResource(VisitRepository visitRepository) {
++    VisitResource(VisitRepository visitRepository, Tracer tracer) {
+         this.visitRepository = visitRepository;
++        this.tracer = tracer;
+     }
+ 
+     @PostMapping("owners/*/pets/{petId}/visits")
+@@ -59,6 +63,15 @@
+         @Valid @RequestBody Visit visit,
+         @PathVariable("petId") @Min(1) int petId) {
+ 
++        Span currentSpan = tracer.currentSpan();
++        if (currentSpan != null) {
++            String traceId = currentSpan.context().traceId();
++            String spanId = currentSpan.context().spanId();
++            log.info("Creating visit for pet ID: {}, traceId: {}, spanId: {}", petId, traceId, spanId);
++        } else {
++            log.info("Creating visit for pet ID: {}, no current span found", petId);
++        }
++
+         visit.setPetId(petId);
+         log.info("Saving visit {}", visit);
+         return visitRepository.save(visit);
+@@ -66,11 +79,27 @@
+ 
+     @GetMapping("owners/*/pets/{petId}/visits")
+     public List<Visit> read(@PathVariable("petId") @Min(1) int petId) {
++        Span currentSpan = tracer.currentSpan();
++        if (currentSpan != null) {
++            String traceId = currentSpan.context().traceId();
++            String spanId = currentSpan.context().spanId();
++            log.info("Finding visits for pet ID: {}, traceId: {}, spanId: {}", petId, traceId, spanId);
++        } else {
++            log.info("Finding visits for pet ID: {}, no current span found", petId);
++        }
+         return visitRepository.findByPetId(petId);
+     }
+ 
+     @GetMapping("pets/visits")
+     public Visits read(@RequestParam("petId") List<Integer> petIds) {
++        Span currentSpan = tracer.currentSpan();
++        if (currentSpan != null) {
++            String traceId = currentSpan.context().traceId();
++            String spanId = currentSpan.context().spanId();
++            log.info("Finding visits for pet IDs: {}, traceId: {}, spanId: {}", petIds, traceId, spanId);
++        } else {
++            log.info("Finding visits for pet IDs: {}, no current span found", petIds);
++        }
+         final List<Visit> byPetIdIn = visitRepository.findByPetIdIn(petIds);
+         return new Visits(byPetIdIn);
+     }
+Index: spring-petclinic-visits-service/src/test/java/org/springframework/samples/petclinic/visits/web/VisitResourceTest.java
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/spring-petclinic-visits-service/src/test/java/org/springframework/samples/petclinic/visits/web/VisitResourceTest.java b/spring-petclinic-visits-service/src/test/java/org/springframework/samples/petclinic/visits/web/VisitResourceTest.java
+--- a/spring-petclinic-visits-service/src/test/java/org/springframework/samples/petclinic/visits/web/VisitResourceTest.java	(revision c79c39221b712ccc8badc826d029c767a48a8843)
++++ b/spring-petclinic-visits-service/src/test/java/org/springframework/samples/petclinic/visits/web/VisitResourceTest.java	(revision 607ac47050eac2046b2b3de6ede7799bb39123f6)
+@@ -1,5 +1,6 @@
+ package org.springframework.samples.petclinic.visits.web;
+ 
++import io.micrometer.tracing.Tracer;
+ import org.junit.jupiter.api.Test;
+ import org.junit.jupiter.api.extension.ExtendWith;
+ import org.springframework.beans.factory.annotation.Autowired;
+@@ -29,6 +30,9 @@
+     @MockBean
+     VisitRepository visitRepository;
+ 
++    @MockBean
++    private Tracer tracer;
++
+     @Test
+     void shouldFetchVisits() throws Exception {
+         given(visitRepository.findByPetIdIn(asList(111, 222)))
